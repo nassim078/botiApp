@@ -1,0 +1,56 @@
+# Node modules
+node_modules/
+
+# Expo
+.expo/
+.expo-shared/
+dist/
+web-build/
+
+# Native
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# Debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Database
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Testing
+coverage/
+
+# Temporary files
+*.tmp
+tmp/
+temp/
