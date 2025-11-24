@@ -59,6 +59,20 @@ db.serialize(() => {
     FOREIGN KEY(runner_id) REFERENCES users(id)
   )`);
 
+    // Messages Table
+    db.run(`CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER,
+    sender_id INTEGER,
+    receiver_id INTEGER,
+    content TEXT,
+    is_read INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(order_id) REFERENCES orders(id),
+    FOREIGN KEY(sender_id) REFERENCES users(id),
+    FOREIGN KEY(receiver_id) REFERENCES users(id)
+  )`);
+
     // Seed users
     const users = [
         { username: 'admin', password: 'admin123', role: 'Admin', full_name: 'System Admin', dob: '2000-01-01', email: 'admin@test.com', is_verified: 1 },
@@ -268,14 +282,24 @@ app.post('/orders/:id/accept', (req, res) => {
         const orderId = req.params.id;
 
         // Check if runner already has an active order
+        console.log(`[DEBUG] Checking active orders for runner ${user.id}`);
         db.get("SELECT count(*) as count FROM orders WHERE runner_id = ? AND status = 'accepted'", [user.id], (err, row) => {
-            if (err) return res.status(500).json({ error: 'Database error checking active orders' });
+            if (err) {
+                console.error('[DEBUG] DB Error checking active orders:', err);
+                return res.status(500).json({ error: 'Database error checking active orders' });
+            }
+            console.log(`[DEBUG] Active orders count: ${row.count}`);
             if (row.count > 0) {
                 return res.status(400).json({ error: 'You already have an active order. Please complete it first.' });
             }
 
+            console.log(`[DEBUG] Updating order ${orderId} to accepted`);
             db.run("UPDATE orders SET runner_id = ?, status = 'accepted' WHERE id = ? AND runner_id IS NULL", [user.id, orderId], function (err) {
-                if (err) return res.status(500).json({ error: 'Database error' });
+                if (err) {
+                    console.error('[DEBUG] DB Error updating order:', err);
+                    return res.status(500).json({ error: 'Database error' });
+                }
+                console.log(`[DEBUG] Order updated. Changes: ${this.changes}`);
                 if (this.changes === 0) return res.status(400).json({ error: 'Order already accepted or not found' });
                 res.json({ message: 'Order accepted successfully' });
             });
@@ -317,6 +341,80 @@ app.post('/orders/:id/cancel', (req, res) => {
                 function (err) {
                     if (err) return res.status(500).json({ error: 'Database error' });
                     res.json({ message: 'Order cancelled successfully' });
+                }
+            );
+        });
+    });
+});
+
+// --- MESSAGING SYSTEM ---
+
+// Get messages for an order
+app.get('/orders/:id/messages', (req, res) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    if (!token) return res.sendStatus(401);
+
+    jwt.verify(token, SECRET_KEY, (err, user) => {
+        if (err) return res.sendStatus(403);
+
+        const orderId = req.params.id;
+
+        // Verify access (must be client or runner of the order)
+        db.get("SELECT * FROM orders WHERE id = ?", [orderId], (err, order) => {
+            if (err || !order) return res.status(404).json({ error: 'Order not found' });
+
+            if (order.client_id !== user.id && order.runner_id !== user.id) {
+                return res.status(403).json({ error: 'Not authorized' });
+            }
+
+            db.all(
+                "SELECT m.*, u.username as sender_name FROM messages m JOIN users u ON m.sender_id = u.id WHERE order_id = ? ORDER BY created_at ASC",
+                [orderId],
+                (err, messages) => {
+                    if (err) return res.status(500).json({ error: 'Database error' });
+                    res.json(messages);
+                }
+            );
+        });
+    });
+});
+
+// Send a message
+app.post('/orders/:id/messages', (req, res) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    if (!token) return res.sendStatus(401);
+
+    jwt.verify(token, SECRET_KEY, (err, user) => {
+        if (err) return res.sendStatus(403);
+
+        const orderId = req.params.id;
+        const { content } = req.body;
+
+        if (!content) return res.status(400).json({ error: 'Message content required' });
+
+        db.get("SELECT * FROM orders WHERE id = ?", [orderId], (err, order) => {
+            if (err || !order) return res.status(404).json({ error: 'Order not found' });
+
+            // Determine receiver
+            let receiverId;
+            if (user.id === order.client_id) {
+                receiverId = order.runner_id;
+            } else if (user.id === order.runner_id) {
+                receiverId = order.client_id;
+            } else {
+                return res.status(403).json({ error: 'Not authorized' });
+            }
+
+            if (!receiverId) return res.status(400).json({ error: 'No recipient found (order might not be accepted yet)' });
+
+            db.run(
+                "INSERT INTO messages (order_id, sender_id, receiver_id, content) VALUES (?, ?, ?, ?)",
+                [orderId, user.id, receiverId, content],
+                function (err) {
+                    if (err) return res.status(500).json({ error: 'Database error' });
+                    res.json({ message: 'Message sent', id: this.lastID });
                 }
             );
         });
